@@ -6,7 +6,6 @@
 #ifndef RFFI_AUDIO_DEVICE_H__
 #define RFFI_AUDIO_DEVICE_H__
 
-#include <atomic>
 #include <cstdint>
 
 #include "api/audio/audio_device.h"
@@ -17,6 +16,12 @@
 
 namespace webrtc {
 namespace rffi {
+
+struct RffiAudioTransport {
+  Mutex playout_mutex;
+  Mutex recording_mutex;
+  AudioTransport* transport = nullptr;
+};
 
 /**
  * RingRTC-specific ADM implementation, which forwards to Rust layer.
@@ -36,8 +41,8 @@ class RingRTCAudioDeviceModule : public AudioDeviceModule {
   // Full-duplex transportation of PCM audio
   // Note that, as with all other functions in this interface, this must be
   // called on the thread that initialized the object.
-  // It also may not be called during recording or playback (as determined by
-  // the rust layer's Playing and Recording functions)
+  // It may be called during recording or playback; it returns after in-flight
+  // callbacks into the previous AudioTransport finish.
   int32_t RegisterAudioCallback(AudioTransport* audio_callback) override;
 
   // RingRTC function that forwards to the underlying `callback_` to send
@@ -191,7 +196,7 @@ class RingRTCAudioDeviceModule : public AudioDeviceModule {
   void* adm_borrowed_ RTC_GUARDED_BY(&thread_checker_) = nullptr;
   AudioDeviceCallbacks rust_callbacks_ RTC_GUARDED_BY(&thread_checker_);
 
-  std::atomic<AudioTransport*> audio_transport_ptr_ = nullptr;
+  RffiAudioTransport audio_transport_;
 };
 
 }  // namespace rffi

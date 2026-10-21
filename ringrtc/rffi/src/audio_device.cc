@@ -32,13 +32,14 @@ Rust_recordedDataIsAvailable(uintptr_t audio_transport_ptr_ptr,
                              uint32_t* new_mic_level,
                              int64_t estimated_capture_time_ns) {
   auto ptr =
-      reinterpret_cast<std::atomic<AudioTransport*>*>(audio_transport_ptr_ptr);
+      reinterpret_cast<RffiAudioTransport*>(audio_transport_ptr_ptr);
   if (ptr == nullptr) {
     RTC_LOG(LS_ERROR) << "Rust_recordedDataIsAvailable: RingRTC passed a "
                       << "null AudioTransport pointer-pointer";
     return -1;
   }
-  AudioTransport* audio_callback = ptr->load(std::memory_order_seq_cst);
+  MutexLock lock(&ptr->recording_mutex);
+  AudioTransport* audio_callback = ptr->transport;
   if (!audio_callback) {
     return 0;
   }
@@ -62,13 +63,14 @@ RUSTEXPORT int32_t Rust_needMorePlayData(uintptr_t audio_transport_ptr_ptr,
                                          int64_t* elapsed_time_ms,
                                          int64_t* ntp_time_ms) {
   auto ptr =
-      reinterpret_cast<std::atomic<AudioTransport*>*>(audio_transport_ptr_ptr);
+      reinterpret_cast<RffiAudioTransport*>(audio_transport_ptr_ptr);
   if (ptr == nullptr) {
     RTC_LOG(LS_ERROR) << "Rust_needMorePlayData: RingRTC passed a "
                       << "null AudioTransport pointer-pointer";
     return -1;
   }
-  AudioTransport* audio_callback = ptr->load(std::memory_order_seq_cst);
+  MutexLock lock(&ptr->playout_mutex);
+  AudioTransport* audio_callback = ptr->transport;
   if (!audio_callback) {
     *n_samples_out = n_samples;
     return 0;
@@ -119,15 +121,9 @@ int32_t RingRTCAudioDeviceModule::RegisterAudioCallback(
   TRACE_LOG;
   RTC_DCHECK_RUN_ON(&thread_checker_);
 
-  // There is a narrow race condition if we update this while playing or
-  // recording: the audio thread might write to a free'd pointer if we change
-  // the callback and free the old one in between when it loads the pointer and
-  // the callback finishes.
-  if (Playing() || Recording()) {
-    return -1;
-  }
-
-  audio_transport_ptr_.store(audio_callback, std::memory_order_seq_cst);
+  MutexLock playout_lock(&audio_transport_.playout_mutex);
+  MutexLock recording_lock(&audio_transport_.recording_mutex);
+  audio_transport_.transport = audio_callback;
   return 0;
 }
 
@@ -135,7 +131,7 @@ int32_t RingRTCAudioDeviceModule::InitInternal() {
   TRACE_LOG;
   RTC_DCHECK_RUN_ON(&thread_checker_);
   return rust_callbacks_.init(
-      adm_borrowed_, reinterpret_cast<uintptr_t>(&audio_transport_ptr_));
+      adm_borrowed_, reinterpret_cast<uintptr_t>(&audio_transport_));
 }
 
 int32_t RingRTCAudioDeviceModule::Init() {
